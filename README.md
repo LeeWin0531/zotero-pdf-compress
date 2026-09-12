@@ -33,7 +33,7 @@
 
 ### 第一步：下载插件文件
 
-到本仓库的 [Releases](../../releases) 页面下载最新的 `pdf-压缩.xpi` 文件。
+到本仓库的 [Releases](../../releases) 页面下载最新的 `zotero-pdf-compress.xpi` 文件。
 
 > 如果 Releases 里还没有，说明维护者尚未发布构建产物，需要自行构建（见文末「自行构建」）。
 
@@ -42,7 +42,7 @@
 1. 打开 Zotero
 2. 菜单栏 **工具 → 插件**（Tools → Add-ons）
 3. 点右上角的**齿轮图标 ⚙ → Install Add-on From File...**（从文件安装插件）
-4. 选中刚下载的 `pdf-压缩.xpi`
+4. 选中刚下载的 `zotero-pdf-compress.xpi`
 5. 点 **Install Now**，然后**重启 Zotero**
 
 ### 第三步：确认安装成功
@@ -184,7 +184,7 @@ Ghostscript 源码获取：<https://github.com/ArtifexSoftware/ghostpdl>
 ```bash
 npm install
 npm run fetch-gs     # 下载并解包 Ghostscript 到 addon/gs/（约 42 MB，不入库）
-npm run build        # 产出 .scaffold/build/pdf-压缩.xpi 并做类型检查
+npm run build        # 产出 .scaffold/build/zotero-pdf-compress.xpi 并做类型检查
 ```
 
 `fetch-gs` 会从 Artifex 官方 release 下载 `gs10080w64.exe`，校验 SHA512 后解包，只保留 `bin/ Resource/ lib/ iccprofiles/`，并重新生成 `addon/gs-manifest.json`。若直连 GitHub 失败，脚本会自动尝试镜像（可用 `GH_PROXY` 环境变量覆盖）。

@@ -5,6 +5,10 @@ export default defineConfig({
   source: ["src", "addon"],
   dist: ".scaffold/build",
   name: pkg.config.addonName,
+  // 产物文件名必须显式指定为 ASCII：默认取 kebabCase(addonName)，
+  // 而插件名是中文「PDF 压缩」，处理后中文被剥离，会得到 pdf-.xpi 这种
+  // 残缺文件名（CI 实测踩到）。插件在 Zotero 里的显示名仍是中文。
+  xpiName: pkg.name,
   id: pkg.config.addonID,
   namespace: pkg.config.addonRef,
   updateURL: `https://github.com/{{owner}}/{{repo}}/releases/download/release/${
