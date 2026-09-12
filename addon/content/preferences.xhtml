@@ -1,33 +1,104 @@
-<linkset>
-  <html:link rel="localization" href="__addonRef__-preferences.ftl" />
-</linkset>
-<groupbox
-  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
->
-  <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
-  <checkbox
-    id="zotero-prefpane-__addonRef__-enable"
-    preference="enable"
-    data-l10n-id="pref-enable"
-  />
-  <hbox>
-    <html:label
-      for="zotero-prefpane-__addonRef__-input"
-      data-l10n-id="pref-input"
-    ></html:label>
-    <html:input
-      type="text"
-      id="zotero-prefpane-__addonRef__-input"
-      preference="input"
-    ></html:input>
-  </hbox>
-  <hbox class="virtualized-table-container" flex="1" height="300px">
-    <html:div id="__addonRef__-table-container" />
-  </hbox>
-</groupbox>
-<vbox>
-  <html:label
-    data-l10n-id="pref-help"
-    data-l10n-args='{"time": "__buildTime__","name": "__addonName__","version":"__buildVersion__"}'
-  ></html:label>
+<?xml version="1.0"?>
+<!-- PDF 压缩插件设置面板（工单 09）。defaultXUL: true -->
+<vbox id="pdfcompress-prefpane" class="main-section">
+  <linkset>
+    <html:link rel="localization" href="pdfcompress-addon.ftl" />
+  </linkset>
+
+  <groupbox>
+    <label><html:h2 data-l10n-id="pdfcompress-prefs-attachment-title"/></label>
+
+    <radiogroup
+      id="pdfcompress-attachment-mode"
+      preference="extensions.zotero.pdfcompress.attachmentMode"
+    >
+      <radio
+        data-l10n-id="pdfcompress-prefs-mode-overwrite"
+        value="overwrite"
+      />
+      <description
+        class="pref-description"
+        data-l10n-id="pdfcompress-prefs-mode-overwrite-desc"
+      />
+      <radio
+        data-l10n-id="pdfcompress-prefs-mode-copy"
+        value="copy"
+      />
+      <description
+        class="pref-description"
+        data-l10n-id="pdfcompress-prefs-mode-copy-desc"
+      />
+    </radiogroup>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2 data-l10n-id="pdfcompress-prefs-compress-title"/></label>
+
+    <hbox align="center">
+      <label
+        data-l10n-id="pdfcompress-prefs-default-preset"
+        control="pdfcompress-default-preset"
+      />
+      <menulist
+        id="pdfcompress-default-preset"
+        native="true"
+        preference="extensions.zotero.pdfcompress.defaultPreset"
+      >
+        <menupopup>
+          <menuitem
+            data-l10n-id="pdfcompress-prefs-preset-balanced"
+            value="balanced"
+          />
+          <menuitem
+            data-l10n-id="pdfcompress-prefs-preset-aggressive"
+            value="aggressive"
+          />
+        </menupopup>
+      </menulist>
+    </hbox>
+
+    <hbox align="center">
+      <label
+        data-l10n-id="pdfcompress-prefs-gain-threshold"
+        control="pdfcompress-gain-threshold"
+      />
+      <menulist
+        id="pdfcompress-gain-threshold"
+        native="true"
+        preference="extensions.zotero.pdfcompress.gainThreshold"
+      >
+        <menupopup>
+          <menuitem
+            data-l10n-id="pdfcompress-prefs-gain-2"
+            value="0.98"
+          />
+          <menuitem
+            data-l10n-id="pdfcompress-prefs-gain-10"
+            value="0.90"
+          />
+          <menuitem
+            data-l10n-id="pdfcompress-prefs-gain-20"
+            value="0.80"
+          />
+        </menupopup>
+      </menulist>
+    </hbox>
+    <description
+      class="pref-description"
+      data-l10n-id="pdfcompress-prefs-gain-threshold-desc"
+    />
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2 data-l10n-id="pdfcompress-prefs-behavior-title"/></label>
+
+    <checkbox
+      data-l10n-id="pdfcompress-prefs-auto-close-reader"
+      preference="extensions.zotero.pdfcompress.autoCloseReader"
+    />
+    <checkbox
+      data-l10n-id="pdfcompress-prefs-show-result"
+      preference="extensions.zotero.pdfcompress.showResultWindow"
+    />
+  </groupbox>
 </vbox>

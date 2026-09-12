@@ -1,33 +1,26 @@
 {
-  "name": "zotero-plugin-template",
+  "name": "zotero-pdf-compress",
   "type": "module",
-  "version": "3.1.0",
-  "description": "Zotero Plugin Template",
+  "version": "0.1.0",
+  "description": "Zotero 插件：右键压缩论文 PDF 附件（内置 Ghostscript，保留标注）",
   "config": {
-    "addonName": "Zotero Plugin Template",
-    "addonID": "addontemplate@euclpts.com",
-    "addonRef": "addontemplate",
-    "addonInstance": "AddonTemplate",
-    "prefsPrefix": "extensions.zotero.addontemplate"
+    "addonName": "PDF 压缩",
+    "addonID": "pdfcompress@local",
+    "addonRef": "pdfcompress",
+    "addonInstance": "PdfCompress",
+    "prefsPrefix": "extensions.zotero.pdfcompress"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/windingwind/zotero-plugin-template.git"
-  },
-  "author": "windingwind",
-  "bugs": {
-    "url": "https://github.com/windingwind/zotero-plugin-template/issues"
-  },
-  "homepage": "https://github.com/windingwind/zotero-plugin-template#readme",
+  "author": "local",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
     "build": "zotero-plugin build && tsc --noEmit",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
-    "release": "zotero-plugin release",
     "test": "zotero-plugin test",
-    "update-deps": "npm update --save"
+    "fetch-gs": "bash scripts/fetch-ghostscript.sh",
+    "update-deps": "npm update --save",
+    "release": "zotero-plugin release"
   },
   "dependencies": {
     "zotero-plugin-toolkit": "^5.1.0-beta.13"
@@ -59,5 +52,13 @@
         }
       }
     ]
+  },
+  "homepage": "https://github.com/local/pdf-compress-prototype",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/local/pdf-compress-prototype.git"
+  },
+  "bugs": {
+    "url": "https://github.com/local/pdf-compress-prototype/issues"
   }
 }

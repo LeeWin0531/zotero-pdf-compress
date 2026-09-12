@@ -7,8 +7,11 @@
 declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
-      "enable": boolean;
-      "input": string;
+      "attachmentMode": string;
+      "defaultPreset": string;
+      "gainThreshold": string;
+      "autoCloseReader": boolean;
+      "showResultWindow": boolean;
     };
   }
 }

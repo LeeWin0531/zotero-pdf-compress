@@ -14,3 +14,10 @@ tsconfig.tsbuildinfo
 .scaffold
 build
 logs
+
+# 便携版 Ghostscript（约 42 MB，第三方 AGPL 二进制，不入库）
+# 用 scripts/fetch-ghostscript.sh 重建；addon/gs-manifest.json 需入库。
+addon/gs/
+
+# 测试用的临时产物
+.pdf-compressing.*

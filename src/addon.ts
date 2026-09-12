@@ -20,6 +20,10 @@ class Addon {
       rows: Array<{ [dataKey: string]: string }>;
     };
     dialog?: DialogHelper;
+    /** PROTOTYPE (工单 03): 记录右键菜单实际走了哪条注册路径 */
+    protoMenuMode?: "MenuManager" | "toolkit";
+    /** PROTOTYPE (工单 03): 注册过程中的错误，供测试断言读取 */
+    protoError?: string;
   };
   // Lifecycle hooks
   public hooks: typeof hooks;

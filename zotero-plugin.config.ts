@@ -14,7 +14,9 @@ export default defineConfig({
     "https://github.com/{{owner}}/{{repo}}/releases/download/v{{version}}/{{xpiName}}.xpi",
 
   build: {
-    assets: ["addon/**/*.*"],
+    // 注意：不能写成 addon/**/*.* —— 那会漏掉 274 个无扩展名的
+    // Ghostscript 资源文件（如 Resource/CIDFont/ArtifexBullet、lib/gsbj）。
+    assets: ["addon/**/*"],
     define: {
       ...pkg.config,
       author: pkg.author,
@@ -41,6 +43,16 @@ export default defineConfig({
 
   test: {
     waitForPlugin: `() => Zotero.${pkg.config.addonInstance}.data.initialized`,
+    // 解包 42MB 的 Ghostscript 需要时间，默认 10s 不够
+    mocha: {
+      timeout: 600000,
+    },
+  },
+
+  // PROTOTYPE: 关掉 jsdebugger —— 默认 server.devtools=true 会加 --jsdebugger，
+  // 使 Zotero 启动后暂停等待调试器连接，导致自动化测试挂起。
+  server: {
+    devtools: false,
   },
 
   // If you need to see a more detailed log, uncomment the following line:

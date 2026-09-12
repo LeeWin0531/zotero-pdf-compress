@@ -1,2 +1,5 @@
-pref("enable", true);
-pref("input", "This is input");
+pref("attachmentMode", "overwrite");
+pref("defaultPreset", "balanced");
+pref("gainThreshold", "0.98");
+pref("autoCloseReader", true);
+pref("showResultWindow", true);
