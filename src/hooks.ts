@@ -2,31 +2,25 @@ import { getString, getLocaleID, initLocale } from "./utils/locale";
 import { createZToolkit } from "./utils/ztoolkit";
 import { getPref, setPref } from "./utils/prefs";
 import {
-  compressAttachment,
   ensureGhostscript,
-  type CompressResult,
   type CompressOptions,
   type Preset,
 } from "./modules/compressor";
+import {
+  formatFailures,
+  pickPdfAttachments,
+  runBatch,
+  type BatchSummary,
+} from "./modules/batch";
 
 // ============================================================================
-// 原型（工单 03 集成验证 + 工单 06 压缩核心 + 工单 09 设置面板）
+// 插件装配层（工单 03/07/08/09）
+// 编排逻辑在 src/modules/batch.ts（可测试），这里只负责 UI 与生命周期。
 // 目标环境：Zotero 9.0.6。
 // ============================================================================
 
 const MENU_ID = "pdf-compress";
 const PREFS_PANE_ID = "pdfcompress-prefpane";
-
-/** 从右键上下文中挑出 PDF 附件。 */
-function pickPdfAttachments(items: any[]): any[] {
-  return (items || []).filter(
-    (it) =>
-      it &&
-      typeof it.isFileAttachment === "function" &&
-      it.isFileAttachment() &&
-      it.attachmentContentType === "application/pdf",
-  );
-}
 
 /** 从首选项读出当前压缩选项。 */
 function getCompressOptions(): CompressOptions {
@@ -42,35 +36,11 @@ function getCompressOptions(): CompressOptions {
   };
 }
 
-/** 关闭正在阅读器中打开该附件的 reader（Windows 下会锁定文件，Q28）。 */
-async function closeReadersFor(itemIDs: number[]): Promise<void> {
-  const readers: any[] = (Zotero as any).Reader?._readers || [];
-  for (const reader of readers) {
-    try {
-      if (itemIDs.includes(reader.itemID)) {
-        await reader.close();
-      }
-    } catch (e) {
-      ztoolkit.log("[compress] 关闭阅读器失败", e);
-    }
-  }
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
-
 /**
- * 执行一批压缩，串行处理（Q21）。
- * 结果提示是否弹出由设置 `showResultWindow` 控制（默认开）。
- * 过程反馈用 Zotero 自带进度条，不用常驻的 ProgressWindow，避免挡阅读。
+ * 执行一批压缩（UI 层）。
+ * 编排与汇总见 batch.ts；本函数只负责进度窗口与结果提示。
  */
 async function runCompression(items: any[], preset: Preset): Promise<void> {
-  const pdfs = pickPdfAttachments(items);
-  if (!pdfs.length) return;
-
   const options = getCompressOptions();
   const presetLabel = preset === "balanced" ? "均衡" : "激进";
   const showResult = getPref("showResultWindow") !== false;
@@ -100,69 +70,51 @@ async function runCompression(items: any[], preset: Preset): Promise<void> {
     return;
   }
 
-  if (autoCloseReader) {
-    await closeReadersFor(pdfs.map((p) => p.id));
-  }
-
-  const results: CompressResult[] = [];
-  let totalIn = 0;
-  let totalOut = 0;
-
-  for (let i = 0; i < pdfs.length; i++) {
-    const item = pdfs[i];
-    const title = item.getField?.("title") || `#${item.id}`;
-    win.changeLine({
-      text: `[${i + 1}/${pdfs.length}] ${title}`,
-      type: "default",
-      progress: Math.round((i / pdfs.length) * 100),
+  let summary: BatchSummary;
+  try {
+    summary = await runBatch(items, preset, gsRoot, options, {
+      autoCloseReader,
+      onStep: (text, progress) =>
+        win.changeLine({ text, type: "default", progress }),
+      log: (msg, err) => ztoolkit.log(msg, err),
     });
-
-    const r = await compressAttachment(item, preset, gsRoot, options);
-    results.push(r);
-    if (r.status === "ok" && r.inSize && r.outSize) {
-      totalIn += r.inSize;
-      totalOut += r.outSize;
-    }
+  } catch (e: any) {
+    win.changeLine({
+      text: `压缩失败：${e?.message || e}`,
+      type: "fail",
+      progress: 100,
+    });
+    win.startCloseTimer(8000);
+    return;
   }
 
-  const ok = results.filter((r) => r.status === "ok");
-  const noGain = results.filter((r) => r.status === "no-gain");
-  const failed = results.filter((r) => r.status === "failed");
-
-  const lines: string[] = [`成功压缩：${ok.length} 个`];
-  if (ok.length) {
-    lines.push(
-      `节省：${formatBytes(totalIn - totalOut)}（${formatBytes(totalIn)} → ${formatBytes(totalOut)}）`,
-    );
+  if (!summary.total) {
+    win.close();
+    return;
   }
-  if (noGain.length) lines.push(`无收益（保留原文件）：${noGain.length} 个`);
-  if (failed.length) lines.push(`失败：${failed.length} 个`);
 
   if (showResult) {
     win.changeLine({
-      text: lines.join("　"),
-      type: failed.length ? "fail" : "success",
+      text: summary.lines.join("　"),
+      type: summary.failed.length ? "fail" : "success",
       progress: 100,
     });
     // 提示自动消失，不常驻
-    win.startCloseTimer(failed.length ? 10000 : 4000);
+    win.startCloseTimer(summary.failed.length ? 10000 : 4000);
   } else {
     win.close();
   }
 
   // 失败详情仍然弹出（这是需要用户知晓的异常，不随提示开关关闭）
-  if (failed.length) {
-    const detail = failed
-      .map((r) => `• ${r.title}\n  ${r.reason}: ${r.message || ""}`)
-      .join("\n\n");
+  if (summary.failed.length) {
     Services.prompt.alert(
       Zotero.getMainWindow() as any,
-      `压缩失败 ${failed.length} 个`,
-      detail,
+      `压缩失败 ${summary.failed.length} 个`,
+      formatFailures(summary.failed),
     );
   }
 
-  ztoolkit.log("[compress] results", results);
+  ztoolkit.log("[compress] summary", summary);
 }
 
 /**
@@ -179,7 +131,10 @@ async function registerContextMenu(): Promise<void> {
     return;
   }
 
-  menuManager.registerMenu({
+  // registerMenu 返回内部使用的 mainKey（= CSS.escape(`${pluginID}-${menuID}`)），
+  // 注销时必须原样传回。不要手写拼接：pluginID 里的 '@' 等字符会被 CSS.escape
+  // 转义（pdfcompress@local → pdfcompress\@local），手写必然对不上（实测踩到）。
+  const registeredKey = menuManager.registerMenu({
     menuID: MENU_ID,
     pluginID: addon.data.config.addonID,
     target: "main/library/item",
@@ -212,6 +167,9 @@ async function registerContextMenu(): Promise<void> {
       },
     ],
   });
+  if (typeof registeredKey === "string") {
+    addon.data.registeredMenuKey = registeredKey;
+  }
   addon.data.protoMenuMode = "MenuManager";
 }
 
@@ -287,7 +245,12 @@ async function onMainWindowUnload(_win: Window): Promise<void> {
 
 function onShutdown(): void {
   try {
-    (Zotero as any).MenuManager?.unregisterMenu?.(MENU_ID);
+    // 用注册时拿到的 key 原样注销（registerMenu 的返回值）。
+    // 见 registerContextMenu 里的说明：手写拼接对不上。
+    const key = addon.data.registeredMenuKey;
+    if (key) {
+      (Zotero as any).MenuManager?.unregisterMenu?.(key);
+    }
   } catch (e) {
     ztoolkit.log("[compress] unregisterMenu failed", e);
   }

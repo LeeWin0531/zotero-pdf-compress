@@ -10,6 +10,7 @@
 - 可切换「新增副本」模式：保留原附件，另存一个压缩后的副本
 - 仅当压缩后明显变小才替换，否则保留原文件（避免「压完反而变大」）
 - 压缩前自动关闭该 PDF 的阅读器（Windows 下文件被锁定时必需）
+- **加密 / 损坏的 PDF 会被识别并跳过**，原文件保持原样，不会产生损坏
 - 完整中文设置面板
 
 > **注意**：原地覆盖**不可撤销**，且默认不保留原件备份。建议先拿一两个不重要的 PDF 试用，确认画质可接受后再批量使用。
@@ -63,8 +64,9 @@ addon/                 插件静态资源
   gs/                    便携版 Ghostscript（由 fetch-gs 生成，不入库）
   gs-manifest.json       内置资源清单（入库；压缩核心靠它定位文件）
 src/
-  hooks.ts               生命周期、菜单、设置面板注册
-  modules/compressor.ts  压缩核心（Ghostscript 调用、变小才替换、原子替换）
+  hooks.ts               生命周期、菜单、设置面板注册、UI 装配
+  modules/compressor.ts  压缩核心（Ghostscript 调用、预检、变小才替换、原子替换）
+  modules/batch.ts       批处理编排与汇总（与 UI 解耦，可测试）
 test/                    自动化测试
 scripts/fetch-ghostscript.sh  下载并解包 Ghostscript
 ```
@@ -84,6 +86,11 @@ scripts/fetch-ghostscript.sh  下载并解包 Ghostscript
 9. XHTML 的 `data-l10n-id` 用**带前缀**的全名，FTL 文件里写**不带前缀**的 key（构建器自动加）。
 10. `server.devtools` 默认为 `true` 会加 `--jsdebugger` 使测试挂起，须设 `false`。
 11. 测试须用页面提供的**全局 `assert`**，不能 `import ... from "chai"`（打包冲突会让整个套件静默消失）。
+12. **设置面板的 XHTML 不能有 `<?xml ... ?>` 声明**——面板是当 fragment 解析的，声明会让解析报 `not well-formed XML`，表现为「侧栏有标签、点了不切换」。
+13. **Ghostscript 对加密/损坏 PDF 返回退出码 0 并产出空白 PDF**。不加 `-dPDFSTOPONERROR` 时，「变小才替换」会把原论文替换成空白文件（**数据丢失**）。现用三重防护：`-dPDFSTOPONERROR` + 压缩前预检 + 压缩后页数校验。
+14. **Windows 上 Ghostscript 的 stderr 会被截断**（只剩最后一行），无法据以区分加密与损坏；且**页数走 stdout、报错走 stderr**，两个流都要读。改用 `pdfpagecount` 预检。
+15. **PostScript 字符串里反斜杠是转义字符**：Windows 路径 `C:\a\b` 直接拼进 `(...)` 会解析坏，必须转正斜杠。
+16. **`unregisterMenu` 的 key 是 `CSS.escape(\`${pluginID}-${menuID}\`)`**（`@` 被转义成 `\@`），手写拼接必然对不上、卸载后菜单残留。须捕获 `registerMenu` 的返回值原样传回。
 
 ## 授权
 

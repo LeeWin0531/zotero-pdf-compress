@@ -12,7 +12,14 @@ export interface CompressResult {
   title: string;
   status: "ok" | "no-gain" | "failed";
   /** 失败原因分类 */
-  reason?: "gs-error" | "encrypted" | "locked" | "not-pdf" | "no-file" | "timeout";
+  reason?:
+    | "gs-error"
+    | "encrypted"
+    | "corrupt"
+    | "locked"
+    | "not-pdf"
+    | "no-file"
+    | "timeout";
   inSize?: number;
   outSize?: number;
   message?: string;
@@ -46,6 +53,11 @@ const COMMON_ARGS = [
   "-dBATCH",
   "-sDEVICE=pdfwrite",
   "-dCompatibilityLevel=1.7",
+  // 关键：遇到加密/损坏等无法解析的输入时立即以非零退出码失败。
+  // 不加这个开关时 Ghostscript 会「成功」产出一个空白 PDF（退出码 0），
+  // 若该空白文件恰好更小，「变小才替换」逻辑会用空白 PDF 覆盖原论文，
+  // 造成不可逆的数据丢失（端到端验收实测踩到）。
+  "-dPDFSTOPONERROR",
   "-dDetectDuplicateImages=true",
   "-dCompressFonts=true",
   "-dSubsetFonts=true",
@@ -176,24 +188,139 @@ async function runGhostscript(
     command: exe,
     arguments: args,
     environmentAppend: true,
+    stdout: "pipe",
     stderr: "pipe",
   });
 
+  // 两个流都读：Ghostscript 的诊断信息会在 stdout 和 stderr 间分配，
+  // 只读 stderr 会丢掉关键错误（实测只剩最后一行）。
   let stderr = "";
   let chunk: string | null;
   while ((chunk = await proc.stderr.readString())) stderr += chunk;
+  let stdout = "";
+  while ((chunk = await proc.stdout.readString())) stdout += chunk;
 
   const { exitCode } = await proc.wait();
-  return { exitCode, stderr };
+  return { exitCode, stderr: stderr + "\n" + stdout };
 }
 
 /** 分类 Ghostscript 的失败原因。 */
-function classifyError(stderr: string, exitCode: number): CompressResult["reason"] {
+function classifyError(
+  stderr: string,
+  exitCode: number,
+): CompressResult["reason"] {
   const s = stderr.toLowerCase();
+  // 加密优先判：stderr 里有明确的密码提示
   if (s.includes("password") || s.includes("encrypted")) return "encrypted";
   if (s.includes("permission") || s.includes("locked")) return "locked";
+  // 结构损坏：解析阶段就失败
+  if (
+    s.includes("/undefined") ||
+    s.includes("unknownerror") ||
+    s.includes("couldn't initialise file") ||
+    s.includes("no pages will be processed")
+  ) {
+    return "corrupt";
+  }
   if (exitCode !== 0) return "gs-error";
   return "gs-error";
+}
+
+// ---------------------------------------------------------------------------
+// PDF 预检（页数 + 可读性）
+// ---------------------------------------------------------------------------
+//
+// 为什么需要它：Windows 上 Ghostscript 的 stderr 会被截断，实测只能拿到
+// 最后一行「Unrecoverable error, exit code 1」，拿不到前面的
+// 「This file requires a password」或「/undefined in --runpdf--」，
+// 因此无法仅凭 stderr 区分「加密」与「损坏」。
+// 预检用 pdfpagecount 直接问文件本身，既能区分原因，又能拿到页数。
+
+export interface PdfProbe {
+  ok: boolean;
+  pageCount: number;
+  reason?: "encrypted" | "corrupt";
+  message?: string;
+}
+
+/** 探测 PDF 的页数与可读性。加密/损坏都会得到 ok:false。 */
+async function probePdf(gsRoot: string, inputPath: string): Promise<PdfProbe> {
+  const PathUtils = getPathUtils();
+  const { Subprocess } = ChromeUtils.importESModule(
+    "resource://gre/modules/Subprocess.sys.mjs",
+  );
+
+  const exe = PathUtils.join(gsRoot, "bin", "gswin64c.exe");
+  const lib = PathUtils.join(gsRoot, "lib");
+  const init = PathUtils.join(gsRoot, "Resource", "Init");
+
+  // PostScript 字符串里反斜杠是转义字符，Windows 路径 C:\a\b 会被解析坏，
+  // 导致正常文件「打不开」而被误判为损坏（实测踩到）。统一转正斜杠。
+  const psPath = inputPath.replace(/\\/g, "/");
+
+  const args = [
+    `-I${lib}`,
+    `-I${init}`,
+    "-q",
+    "-dNOPAUSE",
+    "-dBATCH",
+    "-dNODISPLAY",
+    "-dNOSAFER",
+    "-c",
+    `(${psPath}) (r) file runpdfbegin pdfpagecount = quit`,
+  ];
+
+  let out = "";
+  let err = "";
+  try {
+    const proc = await (Subprocess as any).call({
+      command: exe,
+      arguments: args,
+      environmentAppend: true,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    // 关键：页数走 stdout，报错走 stderr，两个流都要读。
+    // 只读 stderr 会拿到空结果并把正常文件误判为损坏（实测踩到）。
+    let chunk: string | null;
+    while ((chunk = await proc.stdout.readString())) out += chunk;
+    while ((chunk = await proc.stderr.readString())) err += chunk;
+    await proc.wait();
+  } catch (e: any) {
+    return { ok: false, pageCount: 0, reason: "corrupt", message: e?.message };
+  }
+
+  const combined = (out + "\n" + err).toLowerCase();
+  if (combined.includes("password") || combined.includes("encrypted")) {
+    return {
+      ok: false,
+      pageCount: 0,
+      reason: "encrypted",
+      message: "PDF 已加密，需要密码",
+    };
+  }
+
+  // 页数是 stdout 里最后的纯数字行
+  const nums = out
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /^\d+$/.test(l));
+  const pageCount = nums.length ? Number.parseInt(nums[nums.length - 1], 10) : 0;
+
+  if (
+    pageCount <= 0 ||
+    combined.includes("couldn't initialise") ||
+    combined.includes("no pages will be processed")
+  ) {
+    return {
+      ok: false,
+      pageCount: 0,
+      reason: "corrupt",
+      message: "PDF 结构损坏，无法解析",
+    };
+  }
+
+  return { ok: true, pageCount };
 }
 
 /** 附件处理方式（对应设置面板） */
@@ -254,6 +381,18 @@ export async function compressAttachment(
   const inSize = (await IOUtils.stat(inputPath)).size;
   const tmpPath = inputPath + ".compressing.pdf";
 
+  // 预检：加密/损坏的文件在这里就被拦下，绝不可能走到「替换」那一步。
+  // 同时拿到页数，供压缩后校验（防空白输出）。
+  const probe = await probePdf(gsRoot, inputPath);
+  if (!probe.ok) {
+    return {
+      ...base,
+      reason: probe.reason,
+      message: probe.message,
+      inSize,
+    };
+  }
+
   try {
     const { exitCode, stderr } = await runGhostscript(
       gsRoot,
@@ -263,17 +402,41 @@ export async function compressAttachment(
     );
 
     if (exitCode !== 0) {
+      // 失败时 Ghostscript 可能已留下半成品输出，务必清掉，
+      // 避免残留文件被后续流程误当成结果（或占满目录）。
+      await IOUtils.remove(tmpPath, { ignoreAbsent: true });
       return {
         ...base,
         reason: classifyError(stderr, exitCode),
         message:
-          stderr.trim().split("\n").slice(-2).join(" ") || `退出码 ${exitCode}`,
+          stderr
+            .split("\n")
+            .map((l) => l.trim())
+            .filter(
+              (l) => l && !l.startsWith("--dict:") && !l.includes("allocation"),
+            )
+            .slice(0, 2)
+            .join(" ") || `退出码 ${exitCode}`,
         inSize,
       };
     }
 
     if (!(await IOUtils.exists(tmpPath))) {
       return { ...base, reason: "gs-error", message: "未生成输出文件", inSize };
+    }
+
+    // 二次校验：输出页数必须与原文件一致。
+    // 这是防「空白 PDF 覆盖原论文」的最后一道防线——
+    // 即使退出码和预检都被绕过，页数不符也一律拒绝替换。
+    const outProbe = await probePdf(gsRoot, tmpPath);
+    if (!outProbe.ok || outProbe.pageCount !== probe.pageCount) {
+      await IOUtils.remove(tmpPath, { ignoreAbsent: true });
+      return {
+        ...base,
+        reason: "gs-error",
+        message: `输出页数异常（原 ${probe.pageCount} 页，结果 ${outProbe.pageCount} 页），已放弃替换`,
+        inSize,
+      };
     }
 
     const outSize = (await IOUtils.stat(tmpPath)).size;

@@ -24,6 +24,11 @@ class Addon {
     protoMenuMode?: "MenuManager" | "toolkit";
     /** PROTOTYPE (工单 03): 注册过程中的错误，供测试断言读取 */
     protoError?: string;
+    /**
+     * registerMenu 返回的内部 key（= CSS.escape(`${pluginID}-${menuID}`)）。
+     * 注销时必须原样传回，手写拼接会因 CSS.escape 转义而对不上（工单 10 踩到）。
+     */
+    registeredMenuKey?: string;
   };
   // Lifecycle hooks
   public hooks: typeof hooks;
