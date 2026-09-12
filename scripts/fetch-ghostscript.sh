@@ -102,8 +102,11 @@ for root, _, fs in os.walk(gs_dir):
         p = os.path.relpath(os.path.join(root, f), gs_dir).replace(os.sep, "/")
         files.append(p)
 files.sort()
-json.dump({"files": files}, open(manifest, "w"), ensure_ascii=False, indent=0)
-print(f"  {len(files)} 个文件")
+# 显式 UTF-8：Windows CI 上 Python 默认 cp1252，写含非 ASCII 的文件名或
+# 向终端输出中文都会抛 UnicodeEncodeError（GitHub Actions 实测踩到）。
+with open(manifest, "w", encoding="utf-8") as fp:
+    json.dump({"files": files}, fp, ensure_ascii=False, indent=0)
+print("  %d files" % len(files))
 PYEOF
 
 SIZE="$(du -sh "$GS_DIR" | cut -f1)"
