@@ -1,5 +1,7 @@
-<?xml version="1.0"?>
-<!-- PDF 压缩插件设置面板（工单 09）。defaultXUL: true -->
+<!-- PDF 压缩插件设置面板（工单 09）。defaultXUL: true。
+     注意：文件开头不能写 XML 声明。Zotero 把面板当片段拼进容器再解析，
+     声明出现在非文档开头会让 parseXULToFragment 报 not well-formed XML，
+     导致 _loadPane 抛错、面板点了不切换（实测踩到）。 -->
 <vbox id="pdfcompress-prefpane" class="main-section">
   <linkset>
     <html:link rel="localization" href="pdfcompress-addon.ftl" />
