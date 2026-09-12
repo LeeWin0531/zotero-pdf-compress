@@ -66,12 +66,13 @@ echo "  校验通过。"
 echo "解包…"
 SEVEN_ZIP="${SEVEN_ZIP:-}"
 if [ -z "$SEVEN_ZIP" ]; then
-  for c in 7z "/c/Program Files/7-Zip/7z.exe" "/c/Program Files (x86)/7-Zip/7z.exe"; do
+  for c in 7z 7za 7zr "/c/Program Files/7-Zip/7z.exe" "/c/Program Files (x86)/7-Zip/7z.exe"; do
     if command -v "$c" >/dev/null 2>&1 || [ -x "$c" ]; then SEVEN_ZIP="$c"; break; fi
   done
 fi
 if [ -z "$SEVEN_ZIP" ]; then
   echo "错误：未找到 7-Zip。请安装后重试，或用 SEVEN_ZIP 指定路径。" >&2
+  echo "  Windows: https://www.7-zip.org/ ；Debian/Ubuntu: sudo apt-get install p7zip-full" >&2
   exit 1
 fi
 "$SEVEN_ZIP" x -y -o"$TMP_DIR/extract" "$DOWNLOADED" >/dev/null
@@ -83,7 +84,16 @@ for d in bin Resource lib iccprofiles; do
 done
 
 echo "生成文件清单 $MANIFEST …"
-python - "$GS_DIR" "$MANIFEST" <<'PYEOF'
+# 兼容 Windows Git Bash / Linux（ubuntu 上只有 python3）
+PYTHON=""
+for p in python python3 py; do
+  if command -v "$p" >/dev/null 2>&1; then PYTHON="$p"; break; fi
+done
+if [ -z "$PYTHON" ]; then
+  echo "错误：未找到 Python（用于生成文件清单）。" >&2
+  exit 1
+fi
+"$PYTHON" - "$GS_DIR" "$MANIFEST" <<'PYEOF'
 import os, sys, json
 gs_dir, manifest = sys.argv[1], sys.argv[2]
 files = []

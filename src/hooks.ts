@@ -132,8 +132,8 @@ async function registerContextMenu(): Promise<void> {
   }
 
   // registerMenu 返回内部使用的 mainKey（= CSS.escape(`${pluginID}-${menuID}`)），
-  // 注销时必须原样传回。不要手写拼接：pluginID 里的 '@' 等字符会被 CSS.escape
-  // 转义（pdfcompress@local → pdfcompress\@local），手写必然对不上（实测踩到）。
+  // 注销时必须原样传回。不要手写拼接：pluginID 里的 '@' 会被 CSS.escape
+  // 转义成 '\@'，手写必然对不上（实测踩到）。
   const registeredKey = menuManager.registerMenu({
     menuID: MENU_ID,
     pluginID: addon.data.config.addonID,

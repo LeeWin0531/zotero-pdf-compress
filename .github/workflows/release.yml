@@ -1,21 +1,63 @@
 name: Release
 
+# 打 tag（如 v0.1.0）时自动构建并发布 .xpi。
+#
+# 为什么用 windows-latest 而不是 ubuntu：
+# 1. 本插件只支持 Windows，内置的是 Windows 版 Ghostscript；
+# 2. fetch-ghostscript.sh 要解包 Artifex 的 Windows NSIS 安装包，
+#    在 Linux 上解包不可靠。
+# 在 Windows 上跑可以确保构建出的包和本地一致。
+#
+# 关键：构建前必须先跑 `npm run fetch-gs`。addon/gs/ 被 .gitignore 忽略、
+# 不在仓库里，若跳过这一步，打出来的 xpi 只有约 46 KB 且不含 Ghostscript，
+# 是一个完全不能用的包。
+
 on:
   push:
     tags:
-      - v**
+      - "v*"
 
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 jobs:
-  create-release:
-    uses: zotero-plugin-dev/workflows/.github/workflows/release-plugin.yml@main
-    # You can customize any of the inputs here.
-    # If you omit an input, its default value will be used.
-    with:
-      build: "npm run build"
-      release: "npm run release"
-    secrets: inherit
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 下载并解包 Ghostscript（约 62 MB 下载 / 42 MB 解包）。
+      # 7-Zip 在 windows-latest 上已预装；脚本会自动探测路径。
+      - name: Fetch Ghostscript
+        shell: bash
+        run: npm run fetch-gs
+
+      # 构建前断言：确保 Ghostscript 真的就位，
+      # 避免在 CI 上静默产出不含引擎的坏包。
+      - name: Verify Ghostscript is bundled
+        shell: bash
+        run: |
+          if [ ! -f addon/gs/bin/gswin64c.exe ]; then
+            echo "::error::addon/gs/bin/gswin64c.exe 不存在，构建会产出不含 Ghostscript 的坏包"
+            exit 1
+          fi
+          echo "Ghostscript 就位"
+
+      - name: Build
+        run: npm run build
+
+      - name: Release to GitHub
+        shell: bash
+        run: npm run release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

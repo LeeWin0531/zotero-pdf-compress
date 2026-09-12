@@ -31,7 +31,7 @@ describe("工单09 设置面板", function () {
 
       // 面板 XHTML 能否读到
       const rootURI = await (Zotero as any).Plugins.getRootURI(
-        "pdfcompress@local",
+        "zotero-pdf-compress@leewin0531.github.io",
       );
       log("rootURI = " + rootURI);
       const src = await Zotero.File.getResourceAsync(
@@ -58,7 +58,7 @@ describe("工单09 设置面板", function () {
         "../src/modules/compressor"
       );
       const rootURI = await (Zotero as any).Plugins.getRootURI(
-        "pdfcompress@local",
+        "zotero-pdf-compress@leewin0531.github.io",
       );
       const gsRoot = await ensureGhostscript(rootURI);
 

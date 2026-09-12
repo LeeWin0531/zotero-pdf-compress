@@ -5,12 +5,12 @@
   "description": "Zotero 插件：右键压缩论文 PDF 附件（内置 Ghostscript，保留标注）",
   "config": {
     "addonName": "PDF 压缩",
-    "addonID": "pdfcompress@local",
+    "addonID": "zotero-pdf-compress@leewin0531.github.io",
     "addonRef": "pdfcompress",
     "addonInstance": "PdfCompress",
     "prefsPrefix": "extensions.zotero.pdfcompress"
   },
-  "author": "local",
+  "author": "LeeWin0531",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
@@ -53,12 +53,12 @@
       }
     ]
   },
-  "homepage": "https://github.com/local/pdf-compress-prototype",
+  "homepage": "https://github.com/LeeWin0531/zotero-pdf-compress",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/local/pdf-compress-prototype.git"
+    "url": "git+https://github.com/LeeWin0531/zotero-pdf-compress.git"
   },
   "bugs": {
-    "url": "https://github.com/local/pdf-compress-prototype/issues"
+    "url": "https://github.com/LeeWin0531/zotero-pdf-compress/issues"
   }
 }
