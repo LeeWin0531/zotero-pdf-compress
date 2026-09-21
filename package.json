@@ -1,7 +1,7 @@
 {
   "name": "zotero-pdf-compress",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zotero 插件：右键压缩论文 PDF 附件（内置 Ghostscript，保留标注）",
   "config": {
     "addonName": "PDF 压缩",
