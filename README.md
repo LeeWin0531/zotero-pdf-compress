@@ -205,7 +205,11 @@ ZOTERO_PLUGIN_ZOTERO_BIN_PATH="F:\\zotero7\\zotero.exe" npm start
 ZOTERO_PLUGIN_ZOTERO_BIN_PATH="F:\\zotero7\\zotero.exe" npm test -- --exit-on-finish
 ```
 
-测试共 26 项，覆盖压缩核心、批处理编排、设置面板、菜单注册/卸载、以及端到端验收（真实论文压缩、标注保留、加密/损坏归类、阅读器占用）。端到端测试需要临时素材，见 `test/e2e.test.ts` 顶部的路径说明。
+测试共 35 项，覆盖压缩核心、批处理编排、设置面板、菜单注册/卸载、端到端验收（真实论文压缩、标注保留、加密/损坏归类、阅读器占用），以及两组回归测试（`test/regression.test.ts`）。
+
+测试跑在**独立 profile 与数据目录**（`.scaffold/test/`），不会读写你的主库。回归测试的素材由 `test/fixtures.ts` 现造，也不依赖本地文件。
+
+> ⚠️ 测试运行在**开发态**，`rootURI` 是 `file://`。生产安装后是 `jar:`——两者行为不同（见实现要点第 20 条）。凡是碰 XPI 内部资源的改动，务必看 R-B3/R-B4 是否覆盖。
 
 ## 项目结构
 
@@ -243,10 +247,19 @@ scripts/fetch-ghostscript.sh    下载并解包 Ghostscript
 10. `server.devtools` 默认为 `true` 会加 `--jsdebugger` 使测试挂起，须设 `false`。
 11. 测试须用页面提供的**全局 `assert`**，不能 `import ... from "chai"`（打包冲突会让整个套件静默消失）。
 12. **设置面板的 XHTML 不能有 `<?xml ... ?>` 声明**——面板是当 fragment 解析的，声明会让解析报 `not well-formed XML`，表现为「侧栏有标签、点了不切换」。
-13. **Ghostscript 对加密/损坏 PDF 返回退出码 0 并产出空白 PDF**。不加 `-dPDFSTOPONERROR` 时，「变小才替换」会把原论文替换成空白文件（**数据丢失**）。现用三重防护：`-dPDFSTOPONERROR` + 压缩前预检 + 压缩后页数校验。
-14. **Windows 上 Ghostscript 的 stderr 会被截断**（只剩最后一行），无法据以区分加密与损坏；且**页数走 stdout、报错走 stderr**，两个流都要读。改用 `pdfpagecount` 预检。
-15. **PostScript 字符串里反斜杠是转义字符**：Windows 路径 `C:\a\b` 直接拼进 `(...)` 会解析坏，必须转正斜杠。
-16. **`unregisterMenu` 的 key 是 `CSS.escape(\`${pluginID}-${menuID}\`)`**（`@` 被转义成 `\@`），手写拼接必然对不上、卸载后菜单残留。须捕获 `registerMenu` 的返回值原样传回。
+13. **`-dPDFSTOPONERROR` 会误杀正常论文，不能用来防空白输出**（2026-09-21 修复）。它把 Ghostscript 所有可恢复的小毛病升级成致命错误：论文里只要有一处轻微瑕疵（如 Form XObject 的图形状态不平衡、目录书签页码越界），整个转换就在第一页崩掉。实测在 419 篇真实论文里**误杀 83 篇（19.8%）**，报错文案是误导性的 `Page object was reserved for an Annotation destination...`（那只是收尾时的事后抱怨，不是病因）。现改为**按内容校验**：用 `-sDEVICE=bbox` 取每页墨迹外接框，逐页比对面积，拒绝页数不符 / 空白页增多 / 墨迹骤减的输出（`verifyOutput()`）。加密与损坏文件仍被拦下，且不误伤正常论文。
+14. **解包目录的就绪检查不能只看 exe**（2026-09-21 修复）。临时目录被部分清理后（实测只剩 53/531 文件，`lib/`、`Resource/Font` 全空），`bin/gswin64c.exe` 仍在 → 判定「已就绪」→ 永不重解 → Ghostscript 把**每页渲染成空白且退出码为 0** → 「变小才替换」用空白 PDF 覆盖原论文（实测 419 篇里 **25 篇被静默覆盖**）。现按 `gs-manifest.json` 校验关键文件 + 文件数（`isGhostscriptComplete()`），不完整就删掉重解。
+15. **Windows 上 Ghostscript 的 stderr 会被截断**（只剩最后一行），无法据以区分加密与损坏；且**页数走 stdout、报错走 stderr**，两个流都要读。改用 `pdfpagecount` 预检。
+16. **PostScript 字符串里反斜杠是转义字符**：Windows 路径 `C:\a\b` 直接拼进 `(...)` 会解析坏，必须转正斜杠。
+17. **`unregisterMenu` 的 key 是 `CSS.escape(\`${pluginID}-${menuID}\`)`**（`@` 被转义成 `\@`），手写拼接必然对不上、卸载后菜单残留。须捕获 `registerMenu` 的返回值原样传回。
+18. **`-I<root>/Resource/Init` 会让 Ghostscript 把 `<root>/Resource` 当作资源根目录**。因此 `Resource/Font`、`Resource/ColorSpace` 缺失时字体与色彩空间加载不到，页面渲染为空白——**而退出码仍是 0**。这是上面第 14 条的成因，也是「页数校验拦不住」的原因：空白输出的页数完全正确。
+19. **回归测试素材自己造，不依赖用户本地库**。`test/fixtures.ts` 用 PostScript 或手工拼 PDF 生成：正常 PDF、全空白 PDF、图形状态不平衡的 PDF（复现第 13 条）。测试跑在独立 profile 与数据目录（`.scaffold/test/`），不会碰主库。
+20. **生产态的 `rootURI` 是 `jar:` URI，不是 `file://`**（2026-09-21 踩到）。插件 ID 含 `@`（`zotero-pdf-compress@leewin0531.github.io`），Zotero 因此把 XPI 以 jar: 装载。后果：
+    - `IOUtils.read` **只认原生路径**，对 jar: 做 `QueryInterface(nsIFileURL)` 会抛 `NS_NOINTERFACE`（报错形如「Component returned failure code: 0x80004002」）。**已删除 `uriToNativePath`，不要再用。**
+    - 读文本用 `Zotero.File.getResourceAsync`（内部走 nsIChannel，专为含 `@` 的 jar: 设计）。
+    - 读二进制必须用**异步** XHR + `responseType="arraybuffer"`——同步 XHR 不允许设 `responseType`（报「synchronous XMLHttpRequests do not support timeout and responseType」），且 `getResourceAsync` 走文本通道会把 exe/dll 按 UTF-8 解码而损坏。
+    - **开发态（`npm start` / `npm test`）rootURI 恒为 `file://`，两种写法都能过，所以这个坑只在正式安装后才暴露。** 回归测试 R-B4 自建 zip 构造 jar: URI 来锁住它。
+21. **已解包时不要读 XPI**。`ensureGhostscript` 先用 `hasCriticalGhostscriptFiles()` 判断关键文件是否齐备，齐了就复用并立即返回，完全不碰 XPI；只有需要解包（首次安装、目录残缺需重建）时才读 `gs-manifest.json`。这既省掉一次跨 XPI 读取，也让最常见的路径不依赖 jar: 支持（回归测试 R-B3 用不可读 URI 锁住）。
 
 ## 公开发布注意事项
 

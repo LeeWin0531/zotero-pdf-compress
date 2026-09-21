@@ -118,6 +118,9 @@ export function describeReason(reason?: CompressResult["reason"]): string {
       return "文件不存在";
     case "timeout":
       return "压缩超时";
+    case "unverified":
+      // 内容校验拦下的情况：压缩结果丢页/空白，已保留原文件。
+      return "压缩结果不完整，已保留原文件";
     case "gs-error":
     default:
       return "Ghostscript 处理出错";
