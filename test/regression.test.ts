@@ -4,11 +4,17 @@ import {
   ensureGhostscript,
   isGhostscriptComplete,
   readGsManifest,
+  readResourceBytes,
   resetGhostscriptCache,
   verifyOutput,
   compressAttachment,
 } from "../src/modules/compressor";
-import { makePdf, makeBlankPdf, makePdfWithUnbalancedForm } from "./fixtures";
+import {
+  makePdf,
+  makeBlankPdf,
+  makePdfWithUnbalancedForm,
+  makeZip,
+} from "./fixtures";
 
 // 回归测试：两个已诊断的真实 bug（2026-09-21）。
 //
@@ -217,6 +223,103 @@ describe("回归：两个已诊断的真实 bug", function () {
       const v = await verifyOutput(target, src, out, 4);
       log("[R-B2] 重建后压缩校验 = " + JSON.stringify(v));
       assert.isTrue(v.ok, `重建后仍无法正常压缩: ${v.message}`);
+    });
+
+    it("R-B3 已解包时不再读取 XPI 内部（生产态 rootURI 是 jar:）", async function () {
+      // 背景：生产安装后 rootURI 是 jar: URI（插件 ID 含 '@'，Zotero 以 jar:
+      // 装载 XPI）。IOUtils.read 只认原生路径，在 jar: 上做
+      // QueryInterface(nsIFileURL) 会抛 NS_NOINTERFACE。
+      //
+      // 开发态（本测试）rootURI 恒为 file://，因此**测不出** jar: 的问题。
+      // 这里改用「传一个不可能读到的 URI」来锁住真正的不变量：
+      // 目录已完整时，ensureGhostscript 必须完全不碰 XPI。
+      //
+      // 旧实现每次调用都先读 gs-manifest.json，于是在生产态必然报
+      // 「Component returned failure code: 0x80004002 (NS_NOINTERFACE)」。
+      const bogusRootURI = "jar:file:///nonexistent/definitely-not-here.xpi!/";
+
+      resetGhostscriptCache();
+      const gsRoot = await ensureGhostscript(bogusRootURI);
+      const target = PathUtils.join(PathUtils.tempDir, "pdf-compress-gs");
+      log(`[R-B3] 用不可读 URI 调用，返回 ${gsRoot}`);
+      assert.equal(gsRoot, target, "已解包时不应依赖 XPI 可读");
+
+      // 而且必须真的能用
+      const dir = await freshDir("b3");
+      const src = PathUtils.join(dir, "jar-path.pdf");
+      await makePdf(src, 3);
+      const out = PathUtils.join(dir, "jar-path-out.pdf");
+      await compressWithGs(gsRoot, src, out);
+      const v = await verifyOutput(gsRoot, src, out, 3);
+      log("[R-B3] 校验 = " + JSON.stringify(v));
+      assert.isTrue(v.ok, `未读 XPI 的解包目录无法使用: ${v.message}`);
+    });
+
+    it("R-B4 readGsManifest 与二进制读取在 jar: URI 下可用", async function () {
+      // R-B3 保证「已解包」这条常见路径不碰 XPI；本条保证真需要读 XPI 时
+      // （首次安装、目录残缺需重建）在**生产态的 jar: URI** 下读得到。
+      //
+      // 开发态 rootURI 恒为 file://，测不出 jar: 的问题，所以这里**自建一个
+      // zip 当作 XPI**，手工构造 jar: URI，走与生产完全相同的代码路径。
+      // 不依赖 .scaffold/build 里的产物（测试运行会把它清掉）。
+      let err = "";
+      let detail = "";
+      try {
+        const rootURI = await (Zotero as any).Plugins.getRootURI(
+          config.addonID,
+        );
+        detail = "rootURI=" + rootURI;
+
+        // 生产态直接用它自己的 jar: URI
+        let target = rootURI.startsWith("jar:") ? rootURI : "";
+
+        if (!target) {
+          // 开发态：造一个 zip（含 gs-manifest.json 与一个假 exe）当 XPI
+          const dir = await freshDir("b4");
+          const nativeAddon = Services.io
+            .newURI(rootURI)
+            .QueryInterface(Components.interfaces.nsIFileURL).file.path;
+
+          const manifest = await readGsManifest(rootURI);
+          const zipPath = PathUtils.join(dir, "fake.xpi");
+          await makeZip(zipPath, {
+            "gs-manifest.json": new TextEncoder().encode(
+              JSON.stringify(manifest),
+            ),
+            // 用真实 exe 的前若干字节做「二进制」样本，确保 MZ 头可验
+            "gs/bin/gswin64c.exe": await readResourceBytes(
+              (rootURI.endsWith("/") ? rootURI : rootURI + "/") +
+                "gs/bin/gswin64c.exe",
+            ),
+          });
+          detail += ` | 自建 zip=${(await IOUtils.stat(zipPath)).size}B`;
+
+          // 原生路径 → file URI → jar URI（不要手搓 nsIFile：
+          // Components.classes[...].createInstance(...) 不是构造函数）
+          const fileURI = PathUtils.toFileURI(zipPath);
+          target = "jar:" + fileURI + "!/";
+          detail += " | jar=" + target;
+        }
+
+        // 1) 清单可读
+        const m = await readGsManifest(target);
+        detail += ` | manifest=${m.files.length}`;
+        assert.isAbove(m.files.length, 500, "清单条目过少");
+        assert.isTrue(m.files.includes("bin/gswin64c.exe"), "清单缺关键项");
+
+        // 2) 二进制可读且未损坏（exe 必须是 MZ 头）
+        const exeBytes = await readResourceBytes(
+          target + "gs/bin/gswin64c.exe",
+        );
+        detail += ` | exe=${exeBytes.length} hdr=${exeBytes[0]},${exeBytes[1]}`;
+        assert.isAbove(exeBytes.length, 50000, "exe 过小，可能被截断");
+        assert.equal(exeBytes[0], 0x4d, "exe 首字节不是 'M'（内容被破坏）");
+        assert.equal(exeBytes[1], 0x5a, "exe 第二字节不是 'Z'（内容被破坏）");
+        log("[R-B4] " + detail);
+      } catch (e: any) {
+        err = (e?.message || String(e)) + " || " + detail;
+      }
+      assert.equal(err, "", "R-B4 失败: " + err);
     });
   });
 });

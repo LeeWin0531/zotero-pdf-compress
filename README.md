@@ -205,9 +205,11 @@ ZOTERO_PLUGIN_ZOTERO_BIN_PATH="F:\\zotero7\\zotero.exe" npm start
 ZOTERO_PLUGIN_ZOTERO_BIN_PATH="F:\\zotero7\\zotero.exe" npm test -- --exit-on-finish
 ```
 
-测试共 33 项，覆盖压缩核心、批处理编排、设置面板、菜单注册/卸载、端到端验收（真实论文压缩、标注保留、加密/损坏归类、阅读器占用），以及两组回归测试（`test/regression.test.ts`）。
+测试共 35 项，覆盖压缩核心、批处理编排、设置面板、菜单注册/卸载、端到端验收（真实论文压缩、标注保留、加密/损坏归类、阅读器占用），以及两组回归测试（`test/regression.test.ts`）。
 
 测试跑在**独立 profile 与数据目录**（`.scaffold/test/`），不会读写你的主库。回归测试的素材由 `test/fixtures.ts` 现造，也不依赖本地文件。
+
+> ⚠️ 测试运行在**开发态**，`rootURI` 是 `file://`。生产安装后是 `jar:`——两者行为不同（见实现要点第 20 条）。凡是碰 XPI 内部资源的改动，务必看 R-B3/R-B4 是否覆盖。
 
 ## 项目结构
 
@@ -252,6 +254,12 @@ scripts/fetch-ghostscript.sh    下载并解包 Ghostscript
 17. **`unregisterMenu` 的 key 是 `CSS.escape(\`${pluginID}-${menuID}\`)`**（`@` 被转义成 `\@`），手写拼接必然对不上、卸载后菜单残留。须捕获 `registerMenu` 的返回值原样传回。
 18. **`-I<root>/Resource/Init` 会让 Ghostscript 把 `<root>/Resource` 当作资源根目录**。因此 `Resource/Font`、`Resource/ColorSpace` 缺失时字体与色彩空间加载不到，页面渲染为空白——**而退出码仍是 0**。这是上面第 14 条的成因，也是「页数校验拦不住」的原因：空白输出的页数完全正确。
 19. **回归测试素材自己造，不依赖用户本地库**。`test/fixtures.ts` 用 PostScript 或手工拼 PDF 生成：正常 PDF、全空白 PDF、图形状态不平衡的 PDF（复现第 13 条）。测试跑在独立 profile 与数据目录（`.scaffold/test/`），不会碰主库。
+20. **生产态的 `rootURI` 是 `jar:` URI，不是 `file://`**（2026-09-21 踩到）。插件 ID 含 `@`（`zotero-pdf-compress@leewin0531.github.io`），Zotero 因此把 XPI 以 jar: 装载。后果：
+    - `IOUtils.read` **只认原生路径**，对 jar: 做 `QueryInterface(nsIFileURL)` 会抛 `NS_NOINTERFACE`（报错形如「Component returned failure code: 0x80004002」）。**已删除 `uriToNativePath`，不要再用。**
+    - 读文本用 `Zotero.File.getResourceAsync`（内部走 nsIChannel，专为含 `@` 的 jar: 设计）。
+    - 读二进制必须用**异步** XHR + `responseType="arraybuffer"`——同步 XHR 不允许设 `responseType`（报「synchronous XMLHttpRequests do not support timeout and responseType」），且 `getResourceAsync` 走文本通道会把 exe/dll 按 UTF-8 解码而损坏。
+    - **开发态（`npm start` / `npm test`）rootURI 恒为 `file://`，两种写法都能过，所以这个坑只在正式安装后才暴露。** 回归测试 R-B4 自建 zip 构造 jar: URI 来锁住它。
+21. **已解包时不要读 XPI**。`ensureGhostscript` 先用 `hasCriticalGhostscriptFiles()` 判断关键文件是否齐备，齐了就复用并立即返回，完全不碰 XPI；只有需要解包（首次安装、目录残缺需重建）时才读 `gs-manifest.json`。这既省掉一次跨 XPI 读取，也让最常见的路径不依赖 jar: 支持（回归测试 R-B3 用不可读 URI 锁住）。
 
 ## 公开发布注意事项
 

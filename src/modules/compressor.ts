@@ -121,6 +121,7 @@ let gsDirCache: string | null = null;
 const GS_CRITICAL_FILES = [
   "bin/gswin64c.exe",
   "bin/gsdll64.dll",
+  "lib/gsbj",
   "Resource/Init/gs_init.ps",
   "Resource/Init/pdf_main.ps",
   "Resource/Init/Fontmap",
@@ -131,14 +132,30 @@ const GS_CRITICAL_FILES = [
 ];
 
 /**
+ * 关键文件是否齐备（廉价检查，不读清单）。
+ *
+ * 用于「已解包」这条常见路径的快速判定：只要关键文件在就复用，完全不碰
+ * XPI 内部，因此不依赖 jar: 读取能力。
+ */
+async function hasCriticalGhostscriptFiles(target: string): Promise<boolean> {
+  const IOUtils = getIOUtils();
+  const PathUtils = getPathUtils();
+  for (const rel of GS_CRITICAL_FILES) {
+    const p = PathUtils.join(target, ...rel.split("/"));
+    if (!(await IOUtils.exists(p))) return false;
+  }
+  return true;
+}
+
+/**
  * 解包目录是否完整可用。
  *
  * 判定标准（任一不满足即视为不完整，需要重新解包）：
  *  1. 关键文件全部存在；
  *  2. 文件总数达到清单的 99%（清单里没有的关键文件不算数，但少量缺失可容忍）。
  *
- * 用「按清单计数」而非「枚举目录比对」，因为 jar: URI 下无法可靠枚举；
- * IOUtils.getChildren 只接受原生路径，逐目录遍历又太慢。
+ * 与 hasCriticalGhostscriptFiles 的分工：后者是「能用就行」的快速判定，
+ * 用于已解包时直接复用；本函数是「逐项核对」，只在需要判断是否重解时调用。
  *
  * 导出仅为回归测试可断言（见 test/regression.test.ts R-B1）。
  */
@@ -149,10 +166,7 @@ export async function isGhostscriptComplete(
   const IOUtils = getIOUtils();
   const PathUtils = getPathUtils();
 
-  for (const rel of GS_CRITICAL_FILES) {
-    const p = PathUtils.join(target, ...rel.split("/"));
-    if (!(await IOUtils.exists(p))) return false;
-  }
+  if (!(await hasCriticalGhostscriptFiles(target))) return false;
 
   // 目录里有没有清单之外的垃圾不重要，缺文件才是问题。
   // 逐个 stat 531 个文件在慢盘上要几秒，但只在首次启动时执行一次。
@@ -164,16 +178,60 @@ export async function isGhostscriptComplete(
   return present >= manifest.files.length * 0.99;
 }
 
-/** 读入内置的 gs-manifest.json（解包与完整性校验共用）。 */
+/**
+ * 读入内置的 gs-manifest.json（解包与完整性校验共用）。
+ *
+ * 必须用 Zotero.File.getResourceAsync：**生产态下 rootURI 是 jar: URI**。
+ * 插件 ID 含 '@'，Zotero 因此把 XPI 以 jar: 装载（见 Zotero 源码 file.js 的
+ * getResourceAsync 注释：「Goes through an nsIChannel to handle jar: URLs
+ * containing '@'」）。而 IOUtils.read 只认原生路径，jar: 上做
+ * QueryInterface(nsIFileURL) 会抛 NS_NOINTERFACE。
+ *
+ * 开发态（zotero-plugin serve/test）rootURI 是 file://，两种写法都能过——
+ * 这正是该 bug 只在生产安装后才暴露的原因。
+ */
 export async function readGsManifest(
   rootURI: string,
 ): Promise<{ files: string[] }> {
-  const IOUtils = getIOUtils();
   const srcRoot = rootURI.endsWith("/") ? rootURI : rootURI + "/";
-  const bytes = await IOUtils.read(
-    uriToNativePath(srcRoot + "gs-manifest.json"),
+  const text = await (Zotero as any).File.getResourceAsync(
+    srcRoot + "gs-manifest.json",
   );
-  return JSON.parse(new TextDecoder().decode(bytes)) as { files: string[] };
+  return JSON.parse(text) as { files: string[] };
+}
+
+/**
+ * 读入 XPI 内的一个二进制资源，返回字节。
+ *
+ * 同样不能用 IOUtils.read（见 readGsManifest 的说明）。这里用**异步** XHR 的
+ * arraybuffer 模式：同步 XHR 不允许设置 responseType（实测报
+ * "synchronous XMLHttpRequests do not support timeout and responseType"）。
+ *
+ * 也不能用 Zotero.File.getResourceAsync：它走文本通道，会把二进制按 UTF-8
+ * 解码而损坏内容，对 exe/dll 绝对不行。
+ *
+ * 导出仅为回归测试可断言（见 test/regression.test.ts R-B4）。
+ */
+export async function readResourceBytes(uri: string): Promise<Uint8Array> {
+  return new Promise<Uint8Array>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", uri, true);
+    xhr.responseType = "arraybuffer";
+    xhr.onload = () => {
+      if (xhr.status && xhr.status !== 200) {
+        reject(new Error(`读取资源失败（HTTP ${xhr.status}）：${uri}`));
+        return;
+      }
+      const buf = xhr.response;
+      if (!buf) {
+        reject(new Error(`读取资源失败（无内容）：${uri}`));
+        return;
+      }
+      resolve(new Uint8Array(buf as ArrayBuffer));
+    };
+    xhr.onerror = () => reject(new Error(`读取资源失败（网络错误）：${uri}`));
+    xhr.send(null);
+  });
 }
 
 /**
@@ -188,9 +246,8 @@ export function resetGhostscriptCache(): void {
  * 把内置的便携版 Ghostscript 解包到临时目录，返回其根目录。
  *
  * XPI 内的二进制不能就地执行，必须先复制出来（工单 01 结论）。
- * 读取方式：URI → 原生路径（nsIFileURL）→ IOUtils.read。
- * 不能用 fetch：测试页面沙箱里对 file:// 会抛 NetworkError（原型实测）。
- * 不能用 IOUtils.getChildren：它只接受原生路径，不认 file:// URI。
+ * 读取走 readResourceBytes（XHR arraybuffer），因为生产态下 rootURI 是
+ * jar: URI，IOUtils 与 getResourceAsync 都不适合二进制（见其注释）。
  */
 export async function ensureGhostscript(rootURI: string): Promise<string> {
   if (gsDirCache) return gsDirCache;
@@ -201,11 +258,17 @@ export async function ensureGhostscript(rootURI: string): Promise<string> {
 
   const srcRoot = rootURI.endsWith("/") ? rootURI : rootURI + "/";
 
-  // 构建期生成的文件清单，避免依赖目录枚举
+  // 已解包且关键文件齐 → 直接复用。
+  // 这一步刻意放在读 manifest 之前：manifest 在 XPI 内部（生产态是 jar:），
+  // 能省掉一次跨 XPI 的读取，也让「已解包」这条常见路径完全不依赖 jar: 支持。
+  if (await hasCriticalGhostscriptFiles(target)) {
+    gsDirCache = target;
+    return target;
+  }
+
+  // 需要解包（或判定是否要重解）时才读清单
   const manifest = await readGsManifest(srcRoot);
 
-  // 已解包且完整 → 直接用；不完整（例如临时目录被部分清理）→ 删掉重解，
-  // 否则残缺资源会让 Ghostscript 静默产出空白 PDF。
   if (await isGhostscriptComplete(target, manifest)) {
     gsDirCache = target;
     return target;
@@ -217,7 +280,7 @@ export async function ensureGhostscript(rootURI: string): Promise<string> {
   await IOUtils.makeDirectory(target, { ignoreExisting: true });
 
   for (const rel of manifest.files) {
-    const bytes = await IOUtils.read(uriToNativePath(srcRoot + "gs/" + rel));
+    const bytes = await readResourceBytes(srcRoot + "gs/" + rel);
     const dest = PathUtils.join(target, ...rel.split("/"));
     await IOUtils.makeDirectory(PathUtils.parent(dest), {
       ignoreExisting: true,
@@ -230,13 +293,6 @@ export async function ensureGhostscript(rootURI: string): Promise<string> {
   }
   gsDirCache = target;
   return target;
-}
-
-/** URI → 原生文件路径（IOUtils 只接受原生路径）。 */
-function uriToNativePath(uri: string): string {
-  const S = Services as any;
-  const C = Components as any;
-  return S.io.newURI(uri).QueryInterface(C.interfaces.nsIFileURL).file.path;
 }
 
 // ---------------------------------------------------------------------------

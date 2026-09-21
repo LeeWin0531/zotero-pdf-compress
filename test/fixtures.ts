@@ -238,9 +238,123 @@ function concat(chunks: Uint8Array[]): Uint8Array {
   return out;
 }
 
+/**
+ * 打一个 ZIP 文件（stored，不压缩）。
+ *
+ * 用途：R-B4 需要构造 jar: URI 来验证生产态的读取路径，而 jar: 只能指向
+ * zip。测试运行会清掉 .scaffold/build，所以这里自建一个最小的 zip，
+ * 而不是依赖构建产物。
+ */
+async function makeZip(
+  path: string,
+  entries: Record<string, Uint8Array>,
+): Promise<void> {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const chunks: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+
+  // CRC32（ZIP 必需，stored 模式也要填）
+  const crcTable = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[i] = c >>> 0;
+    }
+    return t;
+  })();
+  const crc32 = (b: Uint8Array): number => {
+    let c = 0xffffffff;
+    for (let i = 0; i < b.length; i++) {
+      c = crcTable[(c ^ b[i]) & 0xff] ^ (c >>> 8);
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  };
+
+  const u16 = (n: number) => new Uint8Array([n & 0xff, (n >> 8) & 0xff]);
+  const u32 = (n: number) =>
+    new Uint8Array([
+      n & 0xff,
+      (n >>> 8) & 0xff,
+      (n >>> 16) & 0xff,
+      (n >>> 24) & 0xff,
+    ]);
+
+  const names = Object.keys(entries);
+  for (const name of names) {
+    const data = entries[name];
+    const nameB = enc(name);
+    const crc = crc32(data);
+
+    const local = concat([
+      u32(0x04034b50),
+      u16(20), // version needed
+      u16(0), // flags
+      u16(0), // method: stored
+      u16(0), // mod time
+      u16(0), // mod date
+      u32(crc),
+      u32(data.length), // compressed size
+      u32(data.length), // uncompressed size
+      u16(nameB.length),
+      u16(0), // extra len
+      nameB,
+    ]);
+    chunks.push(local, data);
+
+    central.push(
+      concat([
+        u32(0x02014b50),
+        u16(20), // version made by
+        u16(20), // version needed
+        u16(0), // flags
+        u16(0), // method
+        u16(0), // mod time
+        u16(0), // mod date
+        u32(crc),
+        u32(data.length),
+        u32(data.length),
+        u16(nameB.length),
+        u16(0), // extra
+        u16(0), // comment
+        u16(0), // disk
+        u16(0), // internal attrs
+        u32(0), // external attrs
+        u32(offset),
+        nameB,
+      ]),
+    );
+    offset += local.length + data.length;
+  }
+
+  const centralStart = offset;
+  let centralSize = 0;
+  for (const c of central) {
+    chunks.push(c);
+    centralSize += c.length;
+  }
+
+  chunks.push(
+    concat([
+      u32(0x06054b50),
+      u16(0),
+      u16(0),
+      u16(names.length),
+      u16(names.length),
+      u32(centralSize),
+      u32(centralStart),
+      u16(0),
+    ]),
+  );
+
+  await IOUtils.write(path, concat(chunks));
+}
+
 export {
   makePdf,
   makeBlankPdf,
   makePdfWithBrokenToc,
   makePdfWithUnbalancedForm,
+  makeZip,
 };
